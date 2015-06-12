@@ -82,12 +82,13 @@ if [[ $COUNT -eq 5 ]]; then
 fi
 
 # get size of data disk
-data_disk_size=$($PARTED -m $DATA_DISK_DEV unit MB print | grep "gpt" | \
-  cut -d: -f2 | tr -d MB)
-lib_smartdc_info "creating partition ${DATA_DISK_DEV}1 of ${data_disk_size}MB \
+data_disk_size=$($PARTED -m $DATA_DISK_DEV unit s print | grep "gpt" | \
+  cut -d: -f2 | tr -d s)
+data_disk_size=$((data_disk_size - 34))
+lib_smartdc_info "creating partition ${DATA_DISK_DEV}1 of ${data_disk_size}s \
   - ie. all of $DATA_DISK_DEV"
 
-($PARTED -s $DATA_DISK_DEV unit MB mkpart primary ext2 1 $data_disk_size)
+($PARTED -s $DATA_DISK_DEV unit s mkpart primary ext2 34 $data_disk_size)
 if [[ $? -gt 0 ]]; then
    lib_smartdc_fatal "failed to make gpt partition on ${DATA_DISK_DEV} ( $? )"
 fi
