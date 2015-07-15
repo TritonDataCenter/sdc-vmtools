@@ -53,9 +53,9 @@ install_tools() {
   cp -r ./lib/smartdc /lib/
   cp -r ./usr/sbin/mdata-* /usr/sbin/
   cp -r ./usr/share/man/man1/mdata-* /usr/share/man/man1/
-  ln -s /usr/sbin/mdata-get /lib/smartdc/mdata-get
+  ln -fs /usr/sbin/mdata-get /lib/smartdc/mdata-get
   mv /etc/rc.local /etc/rc.local-backup
-  ln -s /lib/smartdc/joyent_rc.local /etc/rc.local
+  ln -fs /lib/smartdc/joyent_rc.local /etc/rc.local
 }
 
 install_debian() {
@@ -73,7 +73,7 @@ install_redhat() {
   
   # On CentOS 7 systemd is the default.
   # make /etc/rc.d/rc.local executable to enable rc.local Compatibility unit
-  ln -s /lib/smartdc/joyent_rc.local /etc/rc.d/rc.local
+  ln -fs /lib/smartdc/joyent_rc.local /etc/rc.d/rc.local
   chmod 755 /etc/rc.d/rc.local
 }
 
