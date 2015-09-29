@@ -34,6 +34,7 @@ setup_redhat() {
     echo "DEVICE=\"$i\"" > $config
     echo "ONBOOT=\"yes\"" >> $config
     echo "BOOTPROTO=\"dhcp\"" >> $config
+    echo "NM_CONTROLLED=\"no\"" >> $config
     ifup $i
     # Send gratuitous arp packets to force an arp cache update
     if [[ -f $SEND_ARP_UPDATES_BIN ]]; then 
