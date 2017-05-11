@@ -54,7 +54,10 @@ install_tools() {
   cp -r ./usr/sbin/mdata-* /usr/sbin/
   cp -r ./usr/share/man/man1/mdata-* /usr/share/man/man1/
   ln -fs /usr/sbin/mdata-get /lib/smartdc/mdata-get
-  mv /etc/rc.local /etc/rc.local-backup
+  if [[ -e /etc/rc.local ]]
+  then
+    mv /etc/rc.local /etc/rc.local-backup
+  fi
   ln -fs /lib/smartdc/joyent_rc.local /etc/rc.local
 }
 
