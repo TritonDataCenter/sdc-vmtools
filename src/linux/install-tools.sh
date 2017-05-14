@@ -54,8 +54,7 @@ install_tools() {
   cp -r ./usr/sbin/mdata-* /usr/sbin/
   cp -r ./usr/share/man/man1/mdata-* /usr/share/man/man1/
   ln -fs /usr/sbin/mdata-get /lib/smartdc/mdata-get
-  if [[ -e /etc/rc.local ]]
-  then
+  if [[ -e /etc/rc.local ]]; then
     mv /etc/rc.local /etc/rc.local-backup
   fi
   ln -fs /lib/smartdc/joyent_rc.local /etc/rc.local
@@ -106,41 +105,40 @@ if [[ $1 != "-y" ]]; then
   print_prompt
 fi
 
-if [[ "$(uname -s)" != "Linux" ]]
-then
+if [[ "$(uname -s)" != "Linux" ]]; then
     fatal "Sorry. Your OS ($OS) is not supported by this installer"
 fi
 
-if [[ -f /etc/os-release ]]
-then
+if [[ -f /etc/os-release ]]; then
   . /etc/os-release
 
   method=unknown
 
-  for distribution in ${ID_LIKE} ${ID}
-  do
+  for distribution in ${ID_LIKE} ${ID}; do
     case ${distribution} in
-      debian|ubuntu)           method=debian;;
-      fedora|centos|rhel)      method=redhat;;
-      suse|opensuse|sles|sled) method=suse;;
+      debian|ubuntu)
+        method=debian
+        ;;
+      fedora|centos|rhel)
+        method=redhat
+        ;;
+      suse|opensuse|sles|sled)
+        method=suse
+        ;;
     esac
   done
 
-  if [[ -n "${method}" ]]
-  then
+  if [[ -n "${method}" ]]; then
     eval install_${method}
   else
     fatal "Sorry. Your OS ($ID) is not supported by this installer"
   fi
 else
-  if [[ -f /etc/redhat-release ]]
-  then
+  if [[ -f /etc/redhat-release ]]; then
     install_redhat
-  elif [[ -f /etc/debian_version ]]
-  then
+  elif [[ -f /etc/debian_version ]]; then
     install_debian
-  elif [[ -f /etc/SuSE-release ]]
-  then
+  elif [[ -f /etc/SuSE-release ]]; then
     install_suse
   else
     fatal "Sorry. Your OS ($OS) is not supported by this installer"
