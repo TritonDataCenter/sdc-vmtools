@@ -54,7 +54,9 @@ install_tools() {
   cp -r ./usr/sbin/mdata-* /usr/sbin/
   cp -r ./usr/share/man/man1/mdata-* /usr/share/man/man1/
   ln -fs /usr/sbin/mdata-get /lib/smartdc/mdata-get
-  mv /etc/rc.local /etc/rc.local-backup
+  if [[ -e /etc/rc.local ]]; then
+    mv /etc/rc.local /etc/rc.local-backup
+  fi
   ln -fs /lib/smartdc/joyent_rc.local /etc/rc.local
 }
 
@@ -77,6 +79,18 @@ install_redhat() {
   chmod 755 /etc/rc.d/rc.local
 }
 
+install_suse() {
+    install_tools
+    echo "Installing suse-flavour specific files..."
+    # Install packages required for guest tools
+    zypper -q install -y parted
+
+    # On SUSE systemd is the default.
+    # make /etc/rc.d/rc.local executable to enable rc.local Compatibility unit
+    ln -fs /lib/smartdc/joyent_rc.local /etc/rc.d/rc.local
+    chmod 755 /etc/rc.d/rc.local
+}
+
 if [[ $EUID -ne 0 ]] ; then
   fatal "You must be root to run this command"
 fi
@@ -91,22 +105,45 @@ if [[ $1 != "-y" ]]; then
   print_prompt
 fi
 
-OS=$(uname -s)
-
-case $OS in
-  Linux)
-    if [[ -f /etc/redhat-release ]] ; then
-      install_redhat
-    elif [[ -f /etc/debian_version ]] ; then
-      install_debian
-    else
-      fatal "Sorry. Your OS ($OS) is not supported by this installer"
-    fi
-    ;;
-  *)
+if [[ "$(uname -s)" != "Linux" ]]; then
     fatal "Sorry. Your OS ($OS) is not supported by this installer"
-    ;;
-esac
+fi
+
+if [[ -f /etc/os-release ]]; then
+  . /etc/os-release
+
+  method=unknown
+
+  for distribution in ${ID_LIKE} ${ID}; do
+    case ${distribution} in
+      debian|ubuntu)
+        method=debian
+        ;;
+      fedora|centos|rhel)
+        method=redhat
+        ;;
+      suse|opensuse|sles|sled)
+        method=suse
+        ;;
+    esac
+  done
+
+  if [[ -n "${method}" ]]; then
+    eval install_${method}
+  else
+    fatal "Sorry. Your OS ($ID) is not supported by this installer"
+  fi
+else
+  if [[ -f /etc/redhat-release ]]; then
+    install_redhat
+  elif [[ -f /etc/debian_version ]]; then
+    install_debian
+  elif [[ -f /etc/SuSE-release ]]; then
+    install_suse
+  else
+    fatal "Sorry. Your OS ($OS) is not supported by this installer"
+  fi
+fi
 
 echo 
 echo "All done!"
