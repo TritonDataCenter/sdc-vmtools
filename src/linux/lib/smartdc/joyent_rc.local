@@ -35,6 +35,22 @@ setup_redhat() {
     echo "ONBOOT=\"yes\"" >> $config
     echo "BOOTPROTO=\"dhcp\"" >> $config
     ifup $i
+
+    # Fix loopback if configuration doesn't exist
+    if [[ ! -f "/etc/sysconfig/network-scripts/ifcfg-lo" ]]; then 
+    cat <<-EOF >> /etc/sysconfig/network-scripts/ifcfg-lo 
+	DEVICE=lo
+	IPADDR=127.0.0.1
+	NETMASK=255.0.0.0
+	NETWORK=127.0.0.0
+	# If you're having problems with gated making 127.0.0.0/8 a martian,
+	# you can change this to something else (255.255.255.255, for example)
+	BROADCAST=127.255.255.255
+	ONBOOT=yes
+	NAME=loopback
+EOF
+    fi
+
     # Send gratuitous arp packets to force an arp cache update
     if [[ -f $SEND_ARP_UPDATES_BIN ]]; then 
        out=$($SEND_ARP_UPDATES_BIN) 
