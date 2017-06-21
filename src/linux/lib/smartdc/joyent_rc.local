@@ -49,6 +49,7 @@ setup_redhat() {
 	ONBOOT=yes
 	NAME=loopback
 EOF
+    ifup lo
     fi
 
     # Send gratuitous arp packets to force an arp cache update
