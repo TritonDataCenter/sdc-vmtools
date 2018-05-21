@@ -15,6 +15,7 @@
 
 # CentOS and Fedora
 setup_redhat() {
+  if [[ ! "$(grep bhyve /etc/product)" ]]; then
   # CentOS does something interesting to the serial devices.
   # We run a dummy query
   if [[ ! -f $MDATA_GET_BIN ]]; then
@@ -59,6 +60,7 @@ EOF
        lib_smartdc_info "ERROR: File not found $SEND_ARP_UPDATES_BIN"
     fi
   done
+  fi
 }
 
 # Debian and Ubuntu
