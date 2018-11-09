@@ -14,6 +14,10 @@ fatal() {
   exit 1
 }
 
+exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
 info() {
   printf "(info) %s\n" "$@"
 }
@@ -34,6 +38,15 @@ check_root() {
     echo "You must be root to run this command"
     echo "try again with 'sudo `basename $`'"
     exit 1
+  fi
+}
+
+cleanup_cloudinit() {
+  if exists cloud-init; then
+    cloud-init clean -ls
+    rm -rf /var/log/cloud-init* /var/lib/cloud/*
+  else
+    rm -rf /var/log/cloud-init* /var/lib/cloud/*
   fi
 }
 
@@ -149,6 +162,7 @@ case `uname -s` in
       prepare_debian
     fi
     cleanup_logs
+    cleanup_cloudinit
     cleanup_ssh
     cleanup_root
     cleanup_metadata
