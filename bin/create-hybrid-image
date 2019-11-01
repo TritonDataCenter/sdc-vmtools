@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+
+#
+# Copyright 2019 Joyent, Inc.
+#
+
+if [[ -n "$TRACE" ]]; then
+	export PS4='[\D{%FT%TZ}] ${BASH_SOURCE}:${LINENO}: ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+	set -o xtrace
+fi
+
+set -euo pipefail
+IFS=$'\n\t'
+
+ISO=
+IMAGE_NAME=
+DESC=
+HOMEPAGE=
+
+IP=
+NETMASK=
+GATEWAY=
+VLAN_ID=
+NETWORK_UUID=
+
+BLANK_MANIFEST=blank.json
+BUILD_DATE=$(date +%Y%m%d)
+
+SDC_VMMANIFEST=$(cd "$(dirname "$0")"; pwd)/sdc-vmmanifest
+
+VM_UUID=$(uuidgen)
+
+usage() {
+cat <<EOF
+
+Create a hybrid (kvm, bhyve) Debian image from a given ISO file.  This should be
+run from a SmartOS (joyent brand) zone that has been set up for this purpose.
+
+Usage:
+  $0 -i <ISO> -n <IMAGE_NAME> -d <DESC> -u <HOMEPAGE>
+
+Example:
+  $0 -i binary.iso -n debian-10 \\
+      -d "Debian 10 (bionic) 64-bit image with just essential packages... " \\
+      -u https://docs.joyent.com/images/hvm/debian
+
+OPTIONS:
+  -i The ISO
+  -n The name of the image as it would appear in the manifest
+  -d The description of the image
+  -u The homepage URL for the image
+  -h Show this message
+
+EOF
+}
+
+while getopts "hi:n:d:u:o:" OPTION; do
+	case $OPTION in
+	h)
+		usage
+		exit 0
+		;;
+	i)
+		ISO=${OPTARG}
+		;;
+	n)
+		IMAGE_NAME=${OPTARG}
+		;;
+	d)
+		DESC=${OPTARG}
+		;;
+	u)
+		HOMEPAGE=${OPTARG}
+		;;
+	?)
+		usage 1>&2
+		exit 1
+		;;
+	esac
+done
+
+if [[ -z ${ISO} || -z ${IMAGE_NAME} || -z ${DESC} || -z ${HOMEPAGE} ]]; then
+	echo "FATAL: All of -i, -n, -d, and -u are required."
+	usage 1>&2
+	exit 1
+fi
+
+function sanity_check
+{
+	sane=true
+
+	topds=$(zfs list -Ho name /data || true)
+	if [[ -z "$topds" ]]; then
+		sane=false
+		topds=zones/$(zonename)/data
+		echo "$0: No zfs filesystem mounted at /data" 1>&2
+		echo "" 1>&2
+		echo "Fix by running the following in the global zone:" 1>&2
+		echo "  zfs create -o zoned=on -o mountpoint=/data $topds" 1>&2
+		echo "  zonecfg -z $(zonename) 'add dataset; set name=$topds; end'" 1>&2
+		echo "" 1>&2
+	fi
+
+	if [[ ! -f /smartdc/bin/qemu-system-x86_64 ]]; then
+		sane=false
+		echo "$0: qemu executable not present." 1>&2
+		echo "" 1>&2
+		echo "Fix by running the following in the global zone:" 1>&2
+		echo "  zonecfg -z $(zonename) 'add fs; set type=lofs; set dir=/smartdc set special=/smartdc; set options=ro; end'" 1>&2
+		echo "" 1>&2
+	fi
+
+	if [[ ! -c /dev/kvm ]]; then
+		sane=false
+		echo "$0: kvm device not present." 1>&2
+		echo "" 1>&2
+		echo "Fix by running the following in the global zone:" 1>&2
+		echo "  zonecfg -z $(zonename) 'add device; set match=kvm; end'" 1>&2
+		echo "" 1>&2
+	fi
+
+	if [[ $sane == false ]]; then
+		exit 1
+	fi
+}
+
+function create_blank {
+	echo -n "==> Creating blank $IMAGE_NAME virtual disk..."
+
+	# /dev/zvol is buggy in zones, sometimes leaving ghost entries around
+	# hiding newer ones of the same name.  Using a random UUID in each zvol
+	# name avoids this problem.
+	DISKVOL=$topds/$IMAGE_NAME.$VM_UUID.disk0
+	if zfs list "$DISKVOL" >/dev/null 2>&1; then
+		pfexec zfs destroy -r "$DISKVOL"
+	fi
+	pfexec zfs create -s -V 10g "$DISKVOL"
+	echo "done!"
+	echo "==>"
+}
+
+function start_blank {
+	echo "==> Starting ${IMAGE_NAME} with cdrom=$ISO:"
+
+	local version=7.$(uname -v | sed 's/joyent_//')
+	typeset -a args
+
+	# 2 CPUs and 2 GiB RAM
+	args+=( "-cpu" "qemu64" "-smp" "2" )
+	args+=( "-m" "2048" )
+
+	args+=( "-name" "$IMAGE_NAME" )
+	args+=( "-uuid" "$VM_UUID" )
+	args+=( "-smbios" "type=1,manufacturer=Joyent,product=SmartDC HVM,version=$version,serial=$VM_UUID,uuid=$VM_UUID,sku=001,family=Virtual Machine" )
+
+	# CD and disk
+	args+=( "-drive" "file=$ISO,if=ide,index=0,media=cdrom" )
+	args+=( "-drive" "file=/dev/zvol/rdsk/$DISKVOL,if=virtio" )
+	args+=( "-boot" "order=cd,once=d" )
+
+	# User space network device.  Not the best device, but it avoids
+	# the need for vndadm to be run in the global zone with each boot
+	args+=( "-netdev" "user,id=network0,net=192.168.76.0/24")
+	args+=( "-device" "e1000,netdev=network0,mac=52:54:00:12:34:56")
+
+	# Ideally, each distro's installer will be tailored to write the install
+	# log to /dev/ttyS0.  This would mean the jenkins log would actually
+	# capture what happened inside the VM.
+	args+=( "-chardev" "file,id=serial0,path=/dev/stdout" )
+	args+=( "-serial" "chardev:serial0" )
+
+	# A graphical console via VNC at port 5901 (VNC display 1)
+	args+=( "-vga" "std" "-vnc" ":1" )
+	args+=( "-usb" "-usbdevice" "tablet" "-k" "en-us")
+
+	# Go into the background after initilization.  We will later wait with:
+	#   pwait $(cat /tmp/vm.pid)
+	args+=( "-daemonize" "-pidfile" "/tmp/vm.pid" )
+
+	pfexec /smartdc/bin/qemu-system-x86_64 "${args[@]}" </dev/null
+	echo "==>"
+}
+
+function get_VNC {
+	echo "==> Getting VNC info for $IMAGE_NAME:"
+	host=$(pfexec mdata-get sdc:nics |
+	    json -c 'this.nic_tag == "external"' -a ip)
+	port=5901
+	echo "==> Host: $host"
+	echo "==> Port: $port"
+	echo "==>"
+}
+
+function check_state {
+	echo -n "==> Waiting for '$IMAGE_NAME' VM to stop..."
+
+	pwait $(cat /tmp/vm.pid)
+	sync
+	echo "ready!"
+	echo "==> The '$IMAGE_NAME' VM is stopped."
+	echo "==>"
+}
+
+function snapshot {
+	echo "==> Creating snapshot..."
+	pfexec zfs snapshot "$DISKVOL@final"
+	echo "==> done!"
+	echo "==>"
+}
+
+function create_file {
+	echo "==> Creating image file..."
+
+	local gzip=$(type -path pigz gzip | head -1)
+	pfexec zfs send "$DISKVOL@final" |
+	    "$gzip" -9 > "${IMAGE_NAME}-${BUILD_DATE}.zfs.gz"
+	echo "==> done!"
+	echo "==>"
+}
+
+function create_manifest {
+	echo "==> Creating manifest file..."
+	"$SDC_VMMANIFEST" -f "${IMAGE_NAME}-${BUILD_DATE}.zfs.gz" \
+	    -n "$IMAGE_NAME" -s 10240 -v "$BUILD_DATE" -d "$DESC" \
+	    -h "$HOMEPAGE" -o linux > "${IMAGE_NAME}-${BUILD_DATE}.json"
+	echo "==> done!"
+	echo "==>"
+}
+
+function show_image_files {
+	echo "*** Image creation complete ***"
+	echo "==> Image files:"
+	echo "$(ls | grep $BUILD_DATE)"
+	echo ""
+}
+
+function clean_up {
+	echo "==> Cleaning up:"
+	if [[ -n "$DISKVOL" ]]; then
+		pfexec zfs destroy -r "$DISKVOL"
+	fi
+}
+
+# MAIN
+
+echo "*** Starting image creation process! ***"
+
+trap clean_up EXIT
+
+sanity_check
+create_blank
+start_blank
+get_VNC
+check_state
+snapshot
+create_file
+create_manifest
+show_image_files
+
+exit 0
