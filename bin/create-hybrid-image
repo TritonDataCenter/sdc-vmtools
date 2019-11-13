@@ -112,7 +112,7 @@ function sanity_check
 		echo "$0: qemu executable not present." 1>&2
 		echo "" 1>&2
 		echo "Fix by running the following in the global zone:" 1>&2
-		echo "  zonecfg -z $(zonename) 'add fs; set type=lofs; set dir=/smartdc set special=/smartdc; set options=ro; end'" 1>&2
+		echo "  zonecfg -z $(zonename) 'add fs; set type=lofs; set dir=/smartdc; set special=/smartdc; set options=ro; end'" 1>&2
 		echo "" 1>&2
 	fi
 
@@ -126,6 +126,7 @@ function sanity_check
 	fi
 
 	if [[ $sane == false ]]; then
+		echo "$0: Reboot the zone after making the changes described above." 1>&2
 		exit 1
 	fi
 }
@@ -189,18 +190,15 @@ function start_blank {
 
 function get_VNC {
 	echo "==> Getting VNC info for $IMAGE_NAME:"
-	host=$(pfexec mdata-get sdc:nics |
-	    json -c 'this.nic_tag == "external"' -a ip)
-	port=5901
-	echo "==> Host: $host"
-	echo "==> Port: $port"
+	ifconfig -au | awk '$1 == "inet" && $2 != "127.0.0.1" {
+		printf("==> VNC on: %s:5901\n", $2) }'
 	echo "==>"
 }
 
 function check_state {
 	echo -n "==> Waiting for '$IMAGE_NAME' VM to stop..."
 
-	pwait $(cat /tmp/vm.pid)
+	pwait $(pfexec cat /tmp/vm.pid)
 	sync
 	echo "ready!"
 	echo "==> The '$IMAGE_NAME' VM is stopped."
