@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 #
 # This Source Code Form is subject to the terms of the Mozilla Public
@@ -23,13 +23,6 @@ IMAGE_NAME=
 DESC=
 HOMEPAGE=
 
-IP=
-NETMASK=
-GATEWAY=
-VLAN_ID=
-NETWORK_UUID=
-
-BLANK_MANIFEST=blank.json
 BUILD_DATE=$(date +%Y%m%d)
 
 SDC_VMMANIFEST=$(cd "$(dirname "$0")"; pwd)/sdc-vmmanifest
@@ -43,7 +36,7 @@ Create a hybrid (kvm, bhyve) Debian image from a given ISO file.  This should be
 run from a SmartOS (joyent brand) zone that has been set up for this purpose.
 
 Usage:
-  $0 -i <ISO> -n <IMAGE_NAME> -d <DESC> -u <HOMEPAGE>
+  $0 -i <ISO> -n <IMAGE_NAME> -d <DESC> -u <HOMEPAGE> [-- QEMUARGS]
 
 Example:
   $0 -i binary.iso -n debian-10 \\
@@ -60,7 +53,7 @@ OPTIONS:
 EOF
 }
 
-while getopts "hi:n:d:u:o:" OPTION; do
+while getopts "hi:n:d:u:" OPTION; do
 	case $OPTION in
 	h)
 		usage
@@ -91,6 +84,17 @@ if [[ -z ${ISO} || -z ${IMAGE_NAME} || -z ${DESC} || -z ${HOMEPAGE} ]]; then
 	exit 1
 fi
 
+shift $((OPTIND - 1))
+if (( $# == 0 )); then
+	# Set to a scalar value that will work for a test later.  bash is
+	# unhappy if QEMU_ARGS is declared as an empty array and it is used.
+	QEMU_ARGS=
+else
+	QEMU_ARGS=( "$@" )
+fi
+
+PIDFILE=/tmp/qemu-$IMAGE_NAME.pid
+
 function sanity_check
 {
 	sane=true
@@ -103,7 +107,8 @@ function sanity_check
 		echo "" 1>&2
 		echo "Fix by running the following in the global zone:" 1>&2
 		echo "  zfs create -o zoned=on -o mountpoint=/data $topds" 1>&2
-		echo "  zonecfg -z $(zonename) 'add dataset; set name=$topds; end'" 1>&2
+		echo "  zonecfg -z $(zonename) 'add dataset; set name=$topds;" \
+		    "end'" 1>&2
 		echo "" 1>&2
 	fi
 
@@ -112,7 +117,9 @@ function sanity_check
 		echo "$0: qemu executable not present." 1>&2
 		echo "" 1>&2
 		echo "Fix by running the following in the global zone:" 1>&2
-		echo "  zonecfg -z $(zonename) 'add fs; set type=lofs; set dir=/smartdc; set special=/smartdc; set options=ro; end'" 1>&2
+		echo "  zonecfg -z $(zonename) 'add fs; set type=lofs;" \
+		    "set dir=/smartdc; set special=/smartdc;" \
+		    "set options=ro; end'" 1>&2
 		echo "" 1>&2
 	fi
 
@@ -121,12 +128,14 @@ function sanity_check
 		echo "$0: kvm device not present." 1>&2
 		echo "" 1>&2
 		echo "Fix by running the following in the global zone:" 1>&2
-		echo "  zonecfg -z $(zonename) 'add device; set match=kvm; end'" 1>&2
+		echo "  zonecfg -z $(zonename) 'add device; set match=kvm;" \
+		    "end'" 1>&2
 		echo "" 1>&2
 	fi
 
 	if [[ $sane == false ]]; then
-		echo "$0: Reboot the zone after making the changes described above." 1>&2
+		echo "$0: Reboot the zone after making the changes described" \
+		    "above." 1>&2
 		exit 1
 	fi
 }
@@ -164,15 +173,16 @@ function start_blank {
 	args+=( "-drive" "file=$ISO,if=ide,index=0,media=cdrom" )
 	args+=( "-drive" "file=/dev/zvol/rdsk/$DISKVOL,if=virtio" )
 	args+=( "-boot" "order=cd,once=d" )
+	args+=( "-no-reboot" )
 
 	# User space network device.  Not the best device, but it avoids
 	# the need for vndadm to be run in the global zone with each boot
-	args+=( "-netdev" "user,id=network0,net=192.168.76.0/24")
-	args+=( "-device" "e1000,netdev=network0,mac=52:54:00:12:34:56")
+	local netargs="user,id=network0,net=192.168.76.0/24,ip=eth0:dhcp"
+	args+=( "-netdev" "$netargs" )
+	args+=( "-device" "e1000,netdev=network0,mac=52:54:00:12:34:56" )
 
-	# Ideally, each distro's installer will be tailored to write the install
-	# log to /dev/ttyS0.  This would mean the jenkins log would actually
-	# capture what happened inside the VM.
+	# Installers should write logs to /dev/ttyS0 so that the jenkins log
+	# captures what happened inside the VM.
 	args+=( "-chardev" "file,id=serial0,path=/dev/stdout" )
 	args+=( "-serial" "chardev:serial0" )
 
@@ -181,24 +191,27 @@ function start_blank {
 	args+=( "-usb" "-usbdevice" "tablet" "-k" "en-us")
 
 	# Go into the background after initilization.  We will later wait with:
-	#   pwait $(cat /tmp/vm.pid)
-	args+=( "-daemonize" "-pidfile" "/tmp/vm.pid" )
+	#   pwait $(pfexec cat "$PIDFILE")
+	args+=( "-daemonize" )
+	args+=( "-pidfile" "$PIDFILE" )
 
-	pfexec /smartdc/bin/qemu-system-x86_64 "${args[@]}" </dev/null
+	[[ -n $QEMU_ARGS ]] && args+=( "${QEMU_ARGS[@]}" )
+
+	pfexec /smartdc/bin/qemu-system-x86_64 "${args[@]}"
 	echo "==>"
 }
 
 function get_VNC {
 	echo "==> Getting VNC info for $IMAGE_NAME:"
 	ifconfig -au | awk '$1 == "inet" && $2 != "127.0.0.1" {
-		printf("==> VNC on: %s:5901\n", $2) }'
+	    printf("==> VNC on: %s:5901\n", $2) }'
 	echo "==>"
 }
 
 function check_state {
 	echo -n "==> Waiting for '$IMAGE_NAME' VM to stop..."
 
-	pwait $(pfexec cat /tmp/vm.pid)
+	pwait $(pfexec cat "$PIDFILE")
 	sync
 	echo "ready!"
 	echo "==> The '$IMAGE_NAME' VM is stopped."
@@ -234,13 +247,20 @@ function create_manifest {
 function show_image_files {
 	echo "*** Image creation complete ***"
 	echo "==> Image files:"
-	echo "$(ls | grep $BUILD_DATE)"
+	echo "$(ls | grep $IMAGE_NAME-$BUILD_DATE)"
 	echo ""
 }
 
 function clean_up {
 	echo "==> Cleaning up:"
+	local pid=$(pfexec cat "$PIDFILE" || true)
+	if [[ -n $pid ]] && pfexec kill -0 "$pid" >/dev/null 2>&1; then
+		echo "==> Killing qemu PID $pid and waiting for it to exit"
+		pfexec kill $pid 2>/dev/null || true
+		pwait $pid 2>/dev/null || true
+	fi
 	if [[ -n "$DISKVOL" ]]; then
+		echo "==> Destroying $DISKVOL"
 		pfexec zfs destroy -r "$DISKVOL"
 	fi
 }
